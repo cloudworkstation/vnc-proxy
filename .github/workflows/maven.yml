@@ -1,0 +1,40 @@
+name: Build war and package in container image
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**/README.md'
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up JDK 11
+      uses: actions/setup-java@v1
+      with:
+        java-version: 11
+
+    - name: Build with Maven
+      run: mvn -B package --file pom.xml
+      
+    - name: Build docker image
+      run: |
+        docker build -t vnc-proxy .
+    
+    - name: log in to docker
+      run: echo ${{secrets.DOCKERHUB_PASSWORD}} | docker login -u ${{secrets.DOCKERHUB_USERNAME}} --password-stdin
+    
+    - name: Get the tag for docker
+      id: vars
+      run: echo ::set-output name=tag::$(echo ${GITHUB_SHA::8})
+      
+    - name: docker publish
+      run: |
+        docker tag vnc-proxy cloudworkstation/vnc-proxy:${{steps.vars.outputs.tag}}
+        docker tag vnc-proxy cloudworkstation/vnc-proxy:latest
+        docker push cloudworkstation/vnc-proxy:${{steps.vars.outputs.tag}}
+        docker push cloudworkstation/vnc-proxy:latest
