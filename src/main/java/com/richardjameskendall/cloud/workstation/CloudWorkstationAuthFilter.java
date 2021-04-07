@@ -1,6 +1,7 @@
 package com.richardjameskendall.cloud.workstation;
 
 import javax.servlet.*;
+import javax.servlet.annotation.WebFilter;
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -8,6 +9,7 @@ import java.io.PrintWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@WebFilter("/*")
 public class CloudWorkstationAuthFilter implements Filter {
 
     private static Logger logger = LoggerFactory.getLogger(CloudWorkstationAuthFilter.class);
