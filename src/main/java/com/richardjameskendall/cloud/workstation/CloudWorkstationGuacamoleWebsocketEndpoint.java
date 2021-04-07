@@ -23,18 +23,18 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
   private static Logger logger = LoggerFactory.getLogger(CloudWorkstationGuacamoleWebsocketEndpoint.class);
 
   @Override
-  protected GuacamoleTunnel createTunnel(Session sessionm, EndpointConfig endPConfig)
+  protected GuacamoleTunnel createTunnel(Session session, EndpointConfig endPConfig)
                             throws GuacamoleException {
     
-    logger.info("In createTunnel");
+    logger.info("In createTunnel...");
+
+    
 
     // Create our configuration
     GuacamoleConfiguration config = new GuacamoleConfiguration();
     config.setProtocol("vnc");
     config.setParameter("hostname", System.getenv("HOST"));
     config.setParameter("port", System.getenv("PORT"));
-    
-    //config.setParameter("username", System.getenv("USERNAME"));
     config.setParameter("password", System.getenv("PASSWORD"));
 
     // Connect to guacd - everything is hard-coded here.

@@ -21,8 +21,7 @@
 			<artifactId>javax.servlet-api</artifactId>
 			<version>4.0.1</version>
 			<scope>provided</scope>
-	</dependency>
-	
+		</dependency>
 
 		<!-- websocket API -->
 		<dependency>
@@ -31,14 +30,6 @@
 			<version>1.1</version>
 			<scope>provided</scope>
 		</dependency>
-	
-		<!-- guice inject API -->
-		<!--<dependency>
-			<groupId>com.google.inject</groupId>
-			<artifactId>guice</artifactId>
-			<version>4.2.3</version>
-	</dependency>-->
-	
 
 		<!-- Main Guacamole library -->
 		<dependency>
@@ -63,6 +54,7 @@
 				<artifactId>slf4j-api</artifactId>
 				<version>${slf4j.version}</version>
 		</dependency>
+
 		<dependency>
 				<groupId>org.slf4j</groupId>
 				<artifactId>slf4j-simple</artifactId>
