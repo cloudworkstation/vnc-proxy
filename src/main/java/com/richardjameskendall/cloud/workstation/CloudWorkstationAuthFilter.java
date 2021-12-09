@@ -43,10 +43,11 @@ public class CloudWorkstationAuthFilter implements Filter {
                 out.println("Access denied.");
             }
         } else {
-            logger.info("There is no user name available in the headers");
-            response.setContentType("text/html");
-            PrintWriter out = response.getWriter();
-            out.println("Access denied.");
+            logger.info("There is no user name available in the headers, so allowing request");
+            chain.doFilter(request, response);
+            //response.setContentType("text/html");
+            //PrintWriter out = response.getWriter();
+            //out.println("Access denied.");
         }
 
     }

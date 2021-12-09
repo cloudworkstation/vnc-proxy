@@ -11,22 +11,33 @@ import org.apache.guacamole.protocol.ConfiguredGuacamoleSocket;
 import org.apache.guacamole.protocol.GuacamoleConfiguration;
 import org.apache.guacamole.servlet.GuacamoleHTTPTunnelServlet;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @WebServlet("/tunnel")
 public class CloudWorkstationGuacamoleTunnelServlet
     extends GuacamoleHTTPTunnelServlet {
 
+    private static Logger logger = LoggerFactory.getLogger(CloudWorkstationGuacamoleTunnelServlet.class);
+
     @Override
     protected GuacamoleTunnel doConnect(HttpServletRequest request)
         throws GuacamoleException {
+
+        logger.info("In doConnect...");
+        logger.info("Target=" + System.getenv("HOST") + "; port=" + System.getenv("PORT") + "; user=" + System.getenv("USERNAME"));
 
         // Create our configuration
         GuacamoleConfiguration config = new GuacamoleConfiguration();
         config.setProtocol("vnc");
         config.setParameter("hostname", System.getenv("HOST"));
         config.setParameter("port", System.getenv("PORT"));
-        
-        //config.setParameter("username", System.getenv("USERNAME"));
         config.setParameter("password", System.getenv("PASSWORD"));
+        String username = System.getenv("USERNAME");
+        if(username != null) {
+            logger.info("Username was found in environment");
+            config.setParameter("username", username);
+        }
 
         // Connect to guacd - everything is hard-coded here.
         GuacamoleSocket socket = new ConfiguredGuacamoleSocket(
