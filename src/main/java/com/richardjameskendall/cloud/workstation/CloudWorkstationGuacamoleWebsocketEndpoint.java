@@ -32,7 +32,16 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
 
     // Create our configuration
     GuacamoleConfiguration config = new GuacamoleConfiguration();
-    config.setProtocol("vnc");
+    String protocol = System.getenv("PROTOCOL");
+    if(protocol != null) {
+      logger.info("Protocol was found in environment");
+      config.setProtocol(System.getenv("PROTOCOL"));
+      if(protocol.equals("rdp")) {
+        config.setParameter("ignore-cert", "true");
+      }
+    } else {
+      config.setProtocol("vnc");
+    }
     config.setParameter("hostname", System.getenv("HOST"));
     config.setParameter("port", System.getenv("PORT"));
     config.setParameter("password", System.getenv("PASSWORD"));
