@@ -38,6 +38,8 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
       config.setProtocol(System.getenv("PROTOCOL"));
       if(protocol.equals("rdp")) {
         config.setParameter("ignore-cert", "true");
+        config.setParameter("width", "1280");
+        config.setParameter("height", "720");
       }
     } else {
       config.setProtocol("vnc");
