@@ -28,31 +28,8 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
     
     logger.info("In createTunnel...");
 
-    logger.info("Target=" + System.getenv("HOST") + "; port=" + System.getenv("PORT") + "; user=" + System.getenv("USERNAME"));
-
-    // Create our configuration
-    GuacamoleConfiguration config = new GuacamoleConfiguration();
-    String protocol = System.getenv("PROTOCOL");
-    if(protocol != null) {
-      logger.info("Protocol was found in environment");
-      config.setProtocol(System.getenv("PROTOCOL"));
-      if(protocol.equals("rdp")) {
-        config.setParameter("ignore-cert", "true");
-        config.setParameter("width", "1280");
-        config.setParameter("height", "720");
-      }
-    } else {
-      config.setProtocol("vnc");
-    }
-    config.setParameter("hostname", System.getenv("HOST"));
-    config.setParameter("port", System.getenv("PORT"));
-    config.setParameter("password", System.getenv("PASSWORD"));
-    // add username if the environment variable is present
-    String username = System.getenv("USERNAME");
-    if(username != null) {
-      logger.info("Username was found in environment");
-      config.setParameter("username", username);
-    }
+    // get config
+    GuacamoleConfiguration config = ConfigFactory.getConfigFromEnvironment();
 
     // Connect to guacd - everything is hard-coded here.
     GuacamoleSocket socket = new ConfiguredGuacamoleSocket(
