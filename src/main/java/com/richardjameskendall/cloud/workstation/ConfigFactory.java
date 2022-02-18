@@ -14,7 +14,6 @@ public class ConfigFactory {
     logger.info("In getConfigFromEnvironment...");
     logger.info("Target=" + System.getenv("HOST") + "; port=" + System.getenv("PORT"));
 
-
     GuacamoleConfiguration config = new GuacamoleConfiguration();
     String protocol = System.getenv("PROTOCOL");
     if(protocol != null) {
@@ -24,6 +23,7 @@ public class ConfigFactory {
         logger.info("Protcol is RDP");
         config.setParameter("ignore-cert", "true");
         config.setParameter("enable-wallpaper", "true");
+        config.setParameter("enable-font-smoothing", "true");
         String displayRes = System.getenv("DISPLAY_RES");
         if(displayRes != null) {
           String[] displayResBits = displayRes.split("x");
