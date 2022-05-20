@@ -33,6 +33,11 @@
                 padding-left: 10px;
             }
 
+            .titleBar button:last-child {
+                margin-left: auto;
+                margin-right: 10px;
+            }
+
             #display {
                 width: 100vw;
                 height: calc(100vh - 30px);
@@ -56,6 +61,7 @@
                 <input type="checkbox" id="clipboardEnabled"/>
                 <label for="clipboardEnabled">Clipboard shared?</label>
             </div>
+            <button>Reconnect</button>
         </div>
 
         <!-- Display -->
@@ -83,9 +89,6 @@
                         if(p.name === "clipboard-read" && r.state === "prompt") {
                             navigator.clipboard.readText();
                         }
-                        /*navigator.permissions.request(p)
-                            .then(status => { console.log("permission", p, status.state) })
-                            .catch(err => { console.log("permission denied", p, err) });*/
                     });
                 });
             }
@@ -185,8 +188,10 @@
             guac.onclipboard = async function(stream, mimetype) {
                 console.log("remote clipboard fired type", mimetype);
                 await getBlob(stream, mimetype)
-                .then(blob => {
+                .then(async blob => {
                     console.log("got data from clipboard", blob);
+                    let b = await blob.text();
+                    console.log("value as text", b);
                     const enabled = $("#clipboardEnabled").prop("checked");
                     if(enabled) {
                         navigator.clipboard.write([
@@ -241,10 +246,24 @@
 
             // Keyboard
             var keyboard = new Guacamole.Keyboard(document);
+            let ctrl = false;
+
             keyboard.onkeydown = function (keysym) {
-                guac.sendKeyEvent(1, keysym);
+                console.log("keydown", keysym, ctrl);
+                if(keysym === 65507) {
+                    console.log("setting ctrl");
+                    ctrl = true;
+                }
+                if(ctrl && keysym === 118) {
+                    console.log("ctrl-v pressed");
+                } else {
+                    guac.sendKeyEvent(1, keysym);
+                }
             };
             keyboard.onkeyup = function (keysym) {
+                if(keysym === 65507) {
+                    crtl = false;
+                }
                 guac.sendKeyEvent(0, keysym);
             };
 
