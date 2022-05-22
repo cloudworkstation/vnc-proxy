@@ -79,6 +79,7 @@
             let displayWidth = 0;
             let displayHeight = 0;
             let clipboardOn = false;
+            let disconnected = false;
 
             // get permissions status
             function getClipboardPermissions() {
@@ -132,6 +133,7 @@
                     case 4:
                     case 5:
                         $("#conStatus").text("Disconnected");
+                        disconnected = true;
                         break;
                 }
             }
@@ -164,7 +166,7 @@
 
             // handle local window resize
             $(window).resize(function() {
-                console.log("got a resize event");
+                //console.log("got a resize event");
                 setScale();
             });
 
