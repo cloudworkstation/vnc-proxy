@@ -13,6 +13,10 @@ const TitleBar = styled.div`
   color: white;
   align-items: center;
 
+  input {
+    vertical-align: middle;
+  }
+
   p, label {
     margin: 0px;
     padding: 0px;
@@ -37,6 +41,11 @@ const Display = styled.div`
   height: calc(100vh - 30px);
 `
 
+const ClipboardPermissions = [
+  { name: "clipboard-read" },
+  { name: "clipboard-write" }
+];
+
 const GuacClient = (props) => {
   const displayRef = useRef(null);
   const guac = useRef(null);
@@ -56,7 +65,14 @@ const GuacClient = (props) => {
   const [localDisplayRect, setLocalDisplayRect] = useState({width: 0, height: 0});
   const [scaleFactor, setScaleFactor] = useState(1);
   const [conState, setConState] = useState("Idle");
-  const [clipboardEnabled, setClipboardEnabled] = useState(false);
+
+  // ref allows this state item to be accessed inside an event listener
+  const [clipboardEnabled, _setClipboardEnabled] = useState(false);
+  const clipboardEnabledRef = useRef(clipboardEnabled);
+  const setClipboardEnabled = data => {
+    clipboardEnabledRef.current = data;
+    _setClipboardEnabled(data);
+  };
 
   const RemoteResize = (x, y) => {
     console.log(`remote resize ${x} x ${y}`)
@@ -67,6 +83,25 @@ const GuacClient = (props) => {
       }
     );
   }
+
+  const GetClipboardPermissions = () => {
+    ClipboardPermissions.forEach(p => {
+      navigator.permissions.query(p)
+      .then(r => {
+        console.log("permissions", p, r.state);
+        if(p.name === "clipboard-read" && r.state === "prompt") {
+          navigator.clipboard.readText();
+        }
+      });
+    });
+  }
+
+  useEffect(() => {
+    console.log("clipboard enabled", clipboardEnabled);
+    if(clipboardEnabled) {
+      GetClipboardPermissions();
+    }
+  }, [clipboardEnabled]); 
 
   useEffect(() => {
     console.log("display rect", displayRect);
@@ -134,33 +169,86 @@ const GuacClient = (props) => {
     });
   }
 
+  const SendToLocalClipboard = (blob, mimetype) => {
+    console.log("sending to clipboard", clipboardEnabledRef.current);
+    if(clipboardEnabledRef.current) {
+      navigator.clipboard.write([
+        new window.ClipboardItem({
+          [mimetype]: blob
+        })
+      ]);
+    } else {
+      console.log("clipboard disabled");
+    }
+  }
+
   const HandleRemoteClipboard = async (stream, mimetype) => {
     console.log("remote clipboard fired type", mimetype);
     await getBlob(stream, mimetype)
     .then(async blob => {
-      console.log("got data from clipboard", blob, clipboardEnabled);
-      let b = await blob.text();
-      console.log("value as text", b);
-      if(clipboardEnabled) {
-        navigator.clipboard.write([
-          new window.ClipboardItem({
-            [mimetype]: blob
-          })
-        ]);
-      } else {
-        console.log("clipboard disabled");
-      }
+      SendToLocalClipboard(blob, mimetype);
     })
     .catch(e => {
       console.log("error getting blob from clipboard");
     });
   }
 
+  const blobToBase64 = (blob) => {
+    return new Promise((res, _) => {
+      const reader = new FileReader();
+      reader.onloadend = () => res(reader.result);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  const sendBlobBasedOnMimeType = async (item, mimeType) => {
+    const blob = await item.getType(mimeType);
+    const blobAsDataUrl = await blobToBase64(blob);
+    const blobAsB64 = blobAsDataUrl.split(",")[1];
+    console.log("size of b64 blob", blobAsB64.length);
+    const stream = guac.current.createClipboardStream(mimeType, "remote");
+    stream.onack = () => {
+      stream.sendEnd();
+    }
+    stream.sendBlob(blobAsB64);
+  }
+
+  const MimeOrder = ['text/plain', 'text/html'];
+
+  const SendToRemoteClipboard = async () => {
+    // need to get the contents of the local clipboard
+    const items = await navigator.clipboard.read();
+    if(items.length > 0) {
+      console.log("local clipboard has something");
+      const item = items[0];
+      const itemTypes = item.types;
+      if(itemTypes.length >  1) {
+        console.log("multiple types available", itemTypes);
+        const typeToSend = itemTypes.map(i => MimeOrder.indexOf(i)).reduce((p, c) => Math.max(p, c), -1);
+        console.log("got type to send of", typeToSend);
+        if(typeToSend != -1) {
+          console.log("type to send is", MimeOrder[typeToSend]);
+          sendBlobBasedOnMimeType(item, MimeOrder[typeToSend]);
+        } else {
+          console.log("no compatible types on clipboard");
+        }
+      } else {
+        // only one mimetype available
+        console.log("Got a single mimetype from clipboard of", itemTypes[0]);
+        sendBlobBasedOnMimeType(item, itemTypes[0]);
+      }
+    }
+  }
+
+  const Reconnect = () => {
+    guac.current.connect();
+  }
+
   useEffect(() => {
     console.log("starting....");
 
     // create guac client
-    guac.current = new Client(new WebSocketTunnel("websocket-tunnel"))
+    guac.current = new Client(new WebSocketTunnel("websocket-tunnel"));
 
     // attach to canvas
     displayRef.current.appendChild(guac.current.getDisplay().getElement());
@@ -187,7 +275,7 @@ const GuacClient = (props) => {
     guac.current.onclipboard = HandleRemoteClipboard
     
     // connect
-    guac.current.connect("");
+    guac.current.connect();
 
     // register mouse handler
     let mouse  = new Mouse(guac.current.getDisplay().getElement());
@@ -228,11 +316,12 @@ const GuacClient = (props) => {
            id="ce" 
            type="checkbox" 
            checked={clipboardEnabled}
-           onChange={(e) => setClipboardEnabled(e.target.checked)}
+           onChange={(e) => { console.log("checkbox", e.target.checked); setClipboardEnabled(e.target.checked) }}
           />
           <label htmlFor="ce">Clipboard enabled</label>
         </div>
-        <button>Reconnect</button>
+        <button disabled={!clipboardEnabled} onClick={SendToRemoteClipboard}>Copy to remote clipboard</button>
+        <button disabled={conState === "Connected"} onClick={Reconnect}>Reconnect</button>
       </TitleBar>
       <Display
         ref={displayRef} 
