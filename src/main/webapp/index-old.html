@@ -1,0 +1,275 @@
+<!DOCTYPE HTML>
+<html>
+
+    <head>
+        <title>Remote Desktop</title>
+        <style>
+            body {
+                margin: 0px;
+                padding: 0px;
+            }
+
+            .titleBar {
+                width: 100vw;
+                background-color: black;
+                height: 30px;
+                display: flex;
+                flex-direction: row;
+                flex-wrap: nowrap;
+                color: white;
+                align-items: center;
+            }
+
+            .titleBar p, label {
+                margin: 0px;
+                padding: 0px;
+                font-family: Arial;
+                font-size: 10pt;
+                padding-left: 5px;
+                padding-right: 5px;
+            }
+
+            .titleBar p:first-child {
+                padding-left: 10px;
+            }
+
+            .titleBar button:last-child {
+                margin-left: auto;
+                margin-right: 10px;
+            }
+
+            #display {
+                width: 100vw;
+                height: calc(100vh - 30px);
+            }
+        </style>
+    </head>
+
+    <body>
+        <!-- Guacamole -->
+        <script type="text/javascript"
+            src="guacamole-common-js/all.min.js"></script>
+
+        <!-- jquery -->
+        <script src="webjars/jquery/3.6.0/jquery.min.js"></script>
+
+        <div class="titleBar">
+            <p id="conStatus">Idle</p>
+            <p id="displayRes"></p>
+            <p id="machineName"></p>
+            <div>
+                <input type="checkbox" id="clipboardEnabled"/>
+                <label for="clipboardEnabled">Clipboard shared?</label>
+            </div>
+            <button>Reconnect</button>
+        </div>
+
+        <!-- Display -->
+        <div id="display"></div>
+
+        <!-- Init -->
+        <script type="text/javascript"> /* <![CDATA[ */
+            // some ref data
+            const PERMISSIONS = [
+                { name: "clipboard-read" },
+                { name: "clipboard-write" }
+            ];
+
+            // some globals
+            let displayWidth = 0;
+            let displayHeight = 0;
+            let clipboardOn = false;
+            let disconnected = false;
+
+            // get permissions status
+            function getClipboardPermissions() {
+                PERMISSIONS.forEach(p => {
+                    navigator.permissions.query(p)
+                    .then(r => {
+                        console.log("permissions", p, r.state);
+                        if(p.name === "clipboard-read" && r.state === "prompt") {
+                            navigator.clipboard.readText();
+                        }
+                    });
+                });
+            }
+
+            $("#clipboardEnabled").change((e) => {
+                const checked = $("#clipboardEnabled").prop("checked");
+                console.log("clipboard checkbox change", checked);
+                if(checked) {
+                    getClipboardPermissions();
+                }
+            });
+
+            // Get display div from document
+            var display = document.getElementById("display");
+
+            // Instantiate client, using an HTTP tunnel for communications.
+            var guac = new Guacamole.Client(
+                //new Guacamole.HTTPTunnel("tunnel")
+                new Guacamole.WebSocketTunnel("websocket-tunnel")
+            );
+
+            // Add client to display div
+            display.appendChild(guac.getDisplay().getElement());
+
+            // handle state change
+            guac.onstatechange = function(state) {
+                // need to update the UI
+                switch (state) {
+                    case 0:
+                        $("#conStatus").text("Idle");
+                        break;
+                    case 1:
+                        $("#conStatus").text("Connecting...");
+                        break;
+                    case 2:
+                        $("#conStatus").text("Waiting...");
+                        break;
+                    case 3:
+                        $("#conStatus").text("Connected");
+                        break;
+                    case 4:
+                    case 5:
+                        $("#conStatus").text("Disconnected");
+                        disconnected = true;
+                        break;
+                }
+            }
+
+            // handle display size changes
+            guac.getDisplay().onresize = function(x, y) {
+                displayWidth = x;
+                displayHeight = y;
+                $("#displayRes").text(`${displayWidth} x ${displayHeight}`);
+                console.log("remote display dimensions w x h", displayWidth, displayHeight);
+                setScale();
+            }
+
+            // set display scaling if needed
+            function setScale() {
+                // need to get size of canvas
+                let elementWidth = $("#display").width();
+                let elementHeight = $("#display").height();
+                //console.log("display div width x height", elementWidth, elementHeight);
+                if(elementWidth >= displayWidth && elementHeight >= displayHeight) {
+                    // no scaling needed
+                    //console.log("no need to scale");
+                } else {
+                    //console.log("scaling needed");
+                    let factor = Math.min(elementWidth/displayWidth, elementHeight/displayHeight);
+                    //console.log("scale factor", factor);
+                    guac.getDisplay().scale(factor);
+                }
+            }
+
+            // handle local window resize
+            $(window).resize(function() {
+                //console.log("got a resize event");
+                setScale();
+            });
+
+            // handle remote name changes
+            guac.onname = function(name) {
+                console.log("got a name", name);
+                $("#machineName").text(name);
+            }
+
+            // helper to get blob from a Guacamole BlobReader
+            function getBlob (stream, mimetype) {
+              return new Promise((resolve, reject) => {
+                const reader = new Guacamole.BlobReader(stream, mimetype);
+                reader.onend = () => {
+                      resolve(reader.getBlob());
+                };
+              });
+            }
+
+            // handle remote clipboard change
+            guac.onclipboard = async function(stream, mimetype) {
+                console.log("remote clipboard fired type", mimetype);
+                await getBlob(stream, mimetype)
+                .then(async blob => {
+                    console.log("got data from clipboard", blob);
+                    let b = await blob.text();
+                    console.log("value as text", b);
+                    const enabled = $("#clipboardEnabled").prop("checked");
+                    if(enabled) {
+                        navigator.clipboard.write([
+                            new ClipboardItem({
+                                [mimetype]: blob
+                            })
+                        ]);
+                    } else {
+                        console.log("clipboard disabled");
+                    }
+                })
+                .catch(e => {
+                    console.log("error getting blob from clipboard");
+                });
+            }
+
+            // handle local clipboard change
+            navigator.clipboard.addEventListener("clipboardchange", (e) => {
+                console.log("local clipboard change", e);
+            });
+
+            // Error handler
+            guac.onerror = function(error) {
+                console.error(error);
+            };
+
+            // Connect
+            guac.connect("");
+
+            // Disconnect on close
+            window.onunload = function() {
+                guac.disconnect();
+            }
+
+            // Mouse
+            var mouse = new Guacamole.Mouse(guac.getDisplay().getElement());
+            mouse.onmousedown = 
+            mouse.onmouseup   =
+            mouse.onmousemove = function(mouseState) {
+                const scale = guac.getDisplay().getScale();
+                const scaledState = new Guacamole.Mouse.State(
+                    mouseState.x / scale,
+                    mouseState.y / scale,
+                    mouseState.left,
+                    mouseState.middle,
+                    mouseState.right,
+                    mouseState.up,
+                    mouseState.down
+                );
+                guac.sendMouseState(scaledState);
+            };
+
+            // Keyboard
+            var keyboard = new Guacamole.Keyboard(document);
+            let ctrl = false;
+
+            keyboard.onkeydown = function (keysym) {
+                console.log("keydown", keysym, ctrl);
+                if(keysym === 65507) {
+                    console.log("setting ctrl");
+                    ctrl = true;
+                }
+                if(ctrl && keysym === 118) {
+                    console.log("ctrl-v pressed");
+                } else {
+                    guac.sendKeyEvent(1, keysym);
+                }
+            };
+            keyboard.onkeyup = function (keysym) {
+                if(keysym === 65507) {
+                    crtl = false;
+                }
+                guac.sendKeyEvent(0, keysym);
+            };
+
+        /* ]]> */ </script>
+    </body>
+
+</html>
