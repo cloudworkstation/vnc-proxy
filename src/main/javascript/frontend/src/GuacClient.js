@@ -299,6 +299,13 @@ const GuacClient = (props) => {
     let keyboard = new Keyboard(document);
     keyboard.onkeydown = (keysym) => {
       guac.current.sendKeyEvent(1, keysym);
+      if(keysym === 32) {
+        console.log("Space bar, swallowing event.")
+        return false;
+      }
+      if(keysym === 17) {
+        console.log("Ctrl has been pressed.")
+      }
     }
     keyboard.onkeyup = (keysym) => {
       guac.current.sendKeyEvent(0, keysym);
