@@ -16,8 +16,10 @@ import org.apache.guacamole.websocket.GuacamoleWebSocketTunnelEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@ServerEndpoint(value = "/websocket-tunnel", subprotocols = "guacamole")
-public class CloudWorkstationGuacamoleWebsocketEndpoint 
+import java.util.Map;
+
+@ServerEndpoint(value = "/websocket-tunnel/{host}", subprotocols = "guacamole")
+public class CloudWorkstationGuacamoleWebsocketEndpoint
   extends GuacamoleWebSocketTunnelEndpoint {
 
   private static Logger logger = LoggerFactory.getLogger(CloudWorkstationGuacamoleWebsocketEndpoint.class);
@@ -26,10 +28,39 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
   protected GuacamoleTunnel createTunnel(Session session, EndpointConfig endPConfig)
                             throws GuacamoleException {
     
-    logger.info("In createTunnel...");
+    logger.info("createTunnel: starting...");
 
-    // get config
-    GuacamoleConfiguration config = ConfigFactory.getConfigFromEnvironment();
+    GuacamoleConfiguration config;
+    if(ConfigFactory.useEnvironment()) {
+      // this is the use environment case
+      logger.info("createTunnel: using environment config...");
+      config = ConfigFactory.getConfigFromEnvironment();
+    } else {
+      logger.info("createTunnel: using dynamic config...");
+      // check if host path parameter is defined
+      Map<String, String> params = session.getPathParameters();
+      if(params.containsKey("host")) {
+        String host = params.get("host");
+        logger.info("createTunnel: host is defined in path, host = " + host);
+
+        // get http session
+        PrincipalWithSession httpSession = ((PrincipalWithSession)session.getUserPrincipal());
+        // get user
+        String sessionUser = httpSession.getName();
+        logger.info("createTunnel: user is in session, user = " + sessionUser);
+
+        // get config
+        try {
+          config = ConfigFactory.getConfigForUserAndHost(sessionUser, host);
+        } catch (ConfigException e) {
+          logger.error("createTunnel: error getting config", e);
+          throw new GuacamoleException(e.getMessage());
+        }
+      } else {
+        logger.info("createTunnel: no host found in path");
+        throw new GuacamoleException("No host found in path");
+      }
+    }
 
     // Connect to guacd - everything is hard-coded here.
     GuacamoleSocket socket = new ConfiguredGuacamoleSocket(

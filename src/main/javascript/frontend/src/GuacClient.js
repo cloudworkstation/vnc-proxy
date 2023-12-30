@@ -248,7 +248,7 @@ const GuacClient = (props) => {
     console.log("starting....");
 
     // create guac client
-    guac.current = new Client(new WebSocketTunnel("websocket-tunnel"));
+    guac.current = new Client(new WebSocketTunnel("ws://localhost:8080/workstation-0.0.1/websocket-tunnel/test"));
 
     // attach to canvas
     displayRef.current.appendChild(guac.current.getDisplay().getElement());
@@ -328,6 +328,7 @@ const GuacClient = (props) => {
           <label htmlFor="ce">Clipboard enabled</label>
         </div>
         <button disabled={!clipboardEnabled} onClick={SendToRemoteClipboard}>Copy to remote clipboard</button>
+        <p></p>
         <button disabled={conState === "Connected"} onClick={Reconnect}>Reconnect</button>
       </TitleBar>
       <Display
