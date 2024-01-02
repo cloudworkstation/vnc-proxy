@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState } from 'react';
 import styled from 'styled-components';
 
 import { Client, WebSocketTunnel, Mouse, Keyboard, BlobReader } from 'guacamole-common-js';
+import ModalBox from './ModalBox';
+import axios from 'axios';
 
 const TitleBar = styled.div`
   width: 100vw;
@@ -41,6 +43,23 @@ const Display = styled.div`
   height: calc(100vh - 30px);
 `
 
+const HostList = styled.div`
+  width: 400px;
+  border: 1px solid black;
+  padding: 2px;
+
+  ul {
+    list-style-type: none;
+    margin: 0px;
+    padding: 0px;
+
+    li:hover {
+      background-color: lightgrey;
+      cursor: pointer;
+    }
+  }
+`
+
 const ClipboardPermissions = [
   { name: "clipboard-read" },
   { name: "clipboard-write" }
@@ -60,6 +79,12 @@ const GuacClient = (props) => {
       });
     })
   )
+
+  const [mode, setMode] = useState("SINGLE");
+  const [listOfHosts, setListOfHosts] = useState([]);
+  const [selectedHost, setSelectedHost] = useState({});
+  const [shouldConnect, setShouldConnect] = useState(false);
+  const [showHostSelector, setShowHostSelector] = useState(false);
 
   const [displayRect, setDisplayRect] = useState({x: 0, y: 0});
   const [localDisplayRect, setLocalDisplayRect] = useState({width: 0, height: 0});
@@ -245,72 +270,112 @@ const GuacClient = (props) => {
   }
 
   useEffect(() => {
-    console.log("starting....");
-
-    // create guac client
-    guac.current = new Client(new WebSocketTunnel("ws://localhost:8080/workstation-0.0.1/websocket-tunnel/test"));
-
-    // attach to canvas
-    displayRef.current.appendChild(guac.current.getDisplay().getElement());
-    // register error handler
-    guac.current.onerror = (e) => {
-      console.error("error from guac", e);
-    }
-
-    // register disconnect handler
-    window.onunload = () => {
-      guac.current.disconnect();
-    }
-
-    // register remote resize
-    guac.current.getDisplay().onresize = RemoteResize;
-
-    // register local resize
-    displayObserver.current.observe(displayRef.current);
-
-    // register state change handler
-    guac.current.onstatechange = ConnStateUpdate
-
-    // register remote clipboard handler
-    guac.current.onclipboard = HandleRemoteClipboard
-    
-    // connect
-    guac.current.connect();
-
-    // register mouse handler
-    let mouse  = new Mouse(guac.current.getDisplay().getElement());
-    mouse.onmousedown = 
-    mouse.onmouseup = 
-    mouse.onmousemove = (mouseState) => {
-      const scale = guac.current.getDisplay().getScale();
-      const scaledState = new Mouse.State(
-        mouseState.x / scale,
-        mouseState.y / scale,
-        mouseState.left,
-        mouseState.middle,
-        mouseState.right,
-        mouseState.up,
-        mouseState.down
-      );
-      guac.current.sendMouseState(scaledState);
-    }
-
-    // register keyboard handler
-    let keyboard = new Keyboard(document);
-    keyboard.onkeydown = (keysym) => {
-      guac.current.sendKeyEvent(1, keysym);
-      if(keysym === 32) {
-        console.log("Space bar, swallowing event.")
-        return false;
-      }
-      if(keysym === 17) {
-        console.log("Ctrl has been pressed.")
-      }
-    }
-    keyboard.onkeyup = (keysym) => {
-      guac.current.sendKeyEvent(0, keysym);
-    }
+    // this is the page load
+    // need to call client config API to see what kind of scenario this is
+    axios.get("http://localhost:8080/workstation-0.0.1/clientconfig")
+      .then((resp) => {
+        console.log("got response from config API", resp.data)
+        if(resp.data.mode === "PASS_THROUGH") {
+          setMode(resp.data.mode);
+          setListOfHosts(resp.data.availableHosts);
+          if(resp.data.availableHosts.length === 1) {
+            console.log("only a single host provided, so connecting straight away");
+            setSelectedHost(resp.data.availableHosts[0]);
+            setShouldConnect(true);
+          } else {
+            console.log("we have multiple hosts to select from");
+            setListOfHosts(resp.data.availableHosts);
+            setShowHostSelector(true);
+          }
+        }
+      })
+      .catch((error) => {
+        console.log("error calling clientconfig API", error);
+      })
   }, [])
+
+  useEffect(() => {
+    if(shouldConnect) {
+      console.log("starting....");
+
+      // create guac client
+      if(mode === "SINGLE") {
+        console.log("in single mode, so just connecting to tunnel")
+        guac.current = new Client(new WebSocketTunnel(`ws://localhost:8080/workstation-0.0.1/websocket-tunnel`));
+      } else {
+        console.log("in multi mode, using host", selectedHost);
+        guac.current = new Client(new WebSocketTunnel(`ws://localhost:8080/workstation-0.0.1/websocket-tunnel/${selectedHost.hostName}`));
+      }
+
+      // attach to canvas
+      displayRef.current.appendChild(guac.current.getDisplay().getElement());
+      // register error handler
+      guac.current.onerror = (e) => {
+        console.error("error from guac", e);
+      }
+
+      // register disconnect handler
+      window.onunload = () => {
+        guac.current.disconnect();
+      }
+
+      // register remote resize
+      guac.current.getDisplay().onresize = RemoteResize;
+
+      // register local resize
+      displayObserver.current.observe(displayRef.current);
+
+      // register state change handler
+      guac.current.onstatechange = ConnStateUpdate
+
+      // register remote clipboard handler
+      guac.current.onclipboard = HandleRemoteClipboard
+      
+      // connect
+      guac.current.connect();
+
+      // register mouse handler
+      let mouse  = new Mouse(guac.current.getDisplay().getElement());
+      mouse.onmousedown = 
+      mouse.onmouseup = 
+      mouse.onmousemove = (mouseState) => {
+        const scale = guac.current.getDisplay().getScale();
+        const scaledState = new Mouse.State(
+          mouseState.x / scale,
+          mouseState.y / scale,
+          mouseState.left,
+          mouseState.middle,
+          mouseState.right,
+          mouseState.up,
+          mouseState.down
+        );
+        guac.current.sendMouseState(scaledState);
+      }
+
+      // register keyboard handler
+      let keyboard = new Keyboard(document);
+      keyboard.onkeydown = (keysym) => {
+        guac.current.sendKeyEvent(1, keysym);
+        if(keysym === 32) {
+          console.log("Space bar, swallowing event.")
+          return false;
+        }
+        if(keysym === 17) {
+          console.log("Ctrl has been pressed.")
+        }
+      }
+      keyboard.onkeyup = (keysym) => {
+        guac.current.sendKeyEvent(0, keysym);
+      }
+    }
+  }, [shouldConnect])
+
+  const connect = (host) => {
+    console.log("connecting to host", host);
+    setSelectedHost(host);
+    setShowHostSelector(false);
+    setShouldConnect(true);
+  }
 
   return (
     <div>
@@ -334,6 +399,18 @@ const GuacClient = (props) => {
       <Display
         ref={displayRef} 
       />
+      <ModalBox
+        show={showHostSelector}
+      >
+        <p>Select a host to connect to:</p>
+        <HostList>
+          <ul>
+            {
+              listOfHosts.map(host => <li onClick={connect.bind(null, host)}>{host.hostName} ({host.protocol} {host.host}:{host.port})</li>)
+            }
+          </ul>
+        </HostList>
+      </ModalBox>
     </div>
   )
 }

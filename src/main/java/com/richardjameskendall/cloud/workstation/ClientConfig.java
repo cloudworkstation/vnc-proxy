@@ -7,12 +7,12 @@ public class ClientConfig {
 
     private String protocol;
 
-    private List<String> availableHosts;
+    private List<RemoteHost> availableHosts;
 
-
-    public ClientConfig(String mode, String protocol) {
-        this.mode = mode;
-        this.protocol = protocol;
+    public ClientConfig(EnvironmentConfig envconfig) {
+        // used when we are taking config from the environment
+        this.mode = envconfig.getAuthMode();
+        this.protocol = envconfig.getProtocol();
     }
 
     public String getMode() {
@@ -31,11 +31,11 @@ public class ClientConfig {
         this.protocol = protocol;
     }
 
-    public List<String> getAvailableHosts() {
+    public List<RemoteHost> getAvailableHosts() {
         return availableHosts;
     }
 
-    public void setAvailableHosts(List<String> availableHosts) {
+    public void setAvailableHosts(List<RemoteHost> availableHosts) {
         this.availableHosts = availableHosts;
     }
 }

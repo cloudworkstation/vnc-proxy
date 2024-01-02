@@ -10,6 +10,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.List;
 
 @WebServlet(name = "ClientConfigProvider", urlPatterns = "/clientconfig")
 public class ClientConfigProvider extends HttpServlet {
@@ -23,9 +24,19 @@ public class ClientConfigProvider extends HttpServlet {
         logger.info("doGet: getting config for client");
         EnvironmentConfig envconfig = EnvironmentConfig.get();
 
-        ClientConfig config = new ClientConfig(envconfig.getAuthMode(), "test");
-        String clientConfigString = this.gson.toJson(config);
+        ClientConfig config;
 
+        if(ConfigFactory.useEnvironment()) {
+            config = new ClientConfig(envconfig);
+        } else {
+            config = new ClientConfig(envconfig);
+            PrincipalWithSession httpSession = ((PrincipalWithSession)req.getUserPrincipal());
+            String sessionUser = httpSession.getName();
+            List<RemoteHost> availableHosts = ConfigStore.getAvailableHostsForUser(sessionUser, envconfig.getConfigTable());
+            config.setAvailableHosts(availableHosts);
+        }
+
+        String clientConfigString = this.gson.toJson(config);
         PrintWriter out = resp.getWriter();
         resp.setContentType("application/json");
         resp.setCharacterEncoding("UTF-8");
