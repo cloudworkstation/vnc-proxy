@@ -49,12 +49,21 @@ public class CloudWorkstationGuacamoleWebsocketEndpoint
         String sessionUser = httpSession.getName();
         logger.info("createTunnel: user is in session, user = " + sessionUser);
 
-        // get config
-        try {
-          config = ConfigFactory.getConfigForUserAndHost(sessionUser, host);
-        } catch (ConfigException e) {
-          logger.error("createTunnel: error getting config", e);
-          throw new GuacamoleException(e.getMessage());
+        // if the host is __DEFAULT__ then we are in single mode, so we don't attempt to get config dynamically
+        if(host.equals("__DEFAULT__")) {
+          logger.info("createTunnel: using config defined in the environment");
+          config = ConfigFactory.getConfigFromEnvironment();
+        } else {
+
+          // get config
+          try {
+            logger.info("createTunnel: getting dynamic config");
+            config = ConfigFactory.getConfigForUserAndHost(sessionUser, host);
+          } catch (ConfigException e) {
+            logger.error("createTunnel: error getting config", e);
+            throw new GuacamoleException(e.getMessage());
+          }
+
         }
       } else {
         logger.info("createTunnel: no host found in path");

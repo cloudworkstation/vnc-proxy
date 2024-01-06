@@ -45,8 +45,12 @@ const Display = styled.div`
 
 const HostList = styled.div`
   width: 400px;
-  border: 1px solid black;
+  border: 1px solid darkgrey;
   padding: 2px;
+
+  max-height: 50px;
+
+  overflow-y: auto;
 
   ul {
     list-style-type: none;
@@ -60,10 +64,27 @@ const HostList = styled.div`
   }
 `
 
+const HostListTitle = styled.p`
+  font-weight: bold;
+  margin: 0px;
+  padding: 0px;
+  margin-bottom: 10px;
+`
+
 const ClipboardPermissions = [
   { name: "clipboard-read" },
   { name: "clipboard-write" }
 ];
+
+const DetectAPIAddress = (scheme) => {
+  if(window.location.hostname === "localhost" && window.location.port === "3000") {
+    // we are running locally, so assume we are needing to talk to tomcat on port 8080
+    return `${scheme}://localhost:8080/workstation-0.0.1/`
+  } else {
+    // we are running against a remote server
+    return "";
+  }
+}
 
 const GuacClient = (props) => {
   const displayRef = useRef(null);
@@ -272,7 +293,7 @@ const GuacClient = (props) => {
   useEffect(() => {
     // this is the page load
     // need to call client config API to see what kind of scenario this is
-    axios.get("http://localhost:8080/workstation-0.0.1/clientconfig")
+    axios.get(`${DetectAPIAddress("http")}clientconfig`)
       .then((resp) => {
         console.log("got response from config API", resp.data)
         if(resp.data.mode === "PASS_THROUGH") {
@@ -286,6 +307,12 @@ const GuacClient = (props) => {
             console.log("we have multiple hosts to select from");
             setListOfHosts(resp.data.availableHosts);
             setShowHostSelector(true);
+          }
+        } else {
+          if(resp.data.mode === "SINGLE") {
+            console.log("in SINGLE MODE");
+            setMode(resp.data.mode);
+            setShouldConnect(true);
           }
         }
       })
@@ -301,10 +328,10 @@ const GuacClient = (props) => {
       // create guac client
       if(mode === "SINGLE") {
         console.log("in single mode, so just connecting to tunnel")
-        guac.current = new Client(new WebSocketTunnel(`ws://localhost:8080/workstation-0.0.1/websocket-tunnel`));
+        guac.current = new Client(new WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/__DEFAULT__`));
       } else {
         console.log("in multi mode, using host", selectedHost);
-        guac.current = new Client(new WebSocketTunnel(`ws://localhost:8080/workstation-0.0.1/websocket-tunnel/${selectedHost.hostName}`));
+        guac.current = new Client(new WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/${selectedHost.hostName}`));
       }
 
       // attach to canvas
@@ -402,14 +429,15 @@ const GuacClient = (props) => {
       <ModalBox
         show={showHostSelector}
       >
-        <p>Select a host to connect to:</p>
-        <HostList>
+        <HostListTitle>Select a host to connect to:</HostListTitle>
+        {listOfHosts.length > 0 && <HostList>
           <ul>
             {
-              listOfHosts.map(host => <li onClick={connect.bind(null, host)}>{host.hostName} ({host.protocol} {host.host}:{host.port})</li>)
+              listOfHosts.map(host => <li key={`host_${host.hostName}`} onClick={connect.bind(null, host)}>{host.hostName} ({host.protocol} {host.host}:{host.port})</li>)
             }
           </ul>
-        </HostList>
+        </HostList>}
+        {listOfHosts.length === 0 && <p>No hosts are available for you</p>}
       </ModalBox>
     </div>
   )
