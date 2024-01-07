@@ -2,7 +2,7 @@ name: Build war and package in container image
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dynamic-config ]
     paths-ignore:
       - '**/README.md'
 
@@ -35,6 +35,6 @@ jobs:
     - name: docker publish
       run: |
         docker tag vnc-proxy cloudworkstation/vnc-proxy:${{steps.vars.outputs.tag}}
-        docker tag vnc-proxy cloudworkstation/vnc-proxy:latest
+        docker tag vnc-proxy cloudworkstation/vnc-proxy:dynamic-config
         docker push cloudworkstation/vnc-proxy:${{steps.vars.outputs.tag}}
-        docker push cloudworkstation/vnc-proxy:latest
+        docker push cloudworkstation/vnc-proxy:dynamic-config
