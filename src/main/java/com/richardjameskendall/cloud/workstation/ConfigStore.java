@@ -20,6 +20,7 @@ public class ConfigStore {
     public static String PASSWORD_FIELD_NAME = "password";
     public static String USERNAME_FIELD_NAME = "user";
     public static String HOST_ALIAS_FIELD_NAME = "host";
+    public static String USERNAME_OVERRIDE_FIELD_NAME = "host_user";
 
     private static Map<String, String> convertRecord(Map<String, AttributeValue> input) {
         Map<String, String> newMap = input.entrySet().stream()

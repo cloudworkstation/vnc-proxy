@@ -54,7 +54,15 @@ public class EnvironmentConfig {
         displayRes = input.get(ConfigStore.DISPLAY_RES_FIELD_NAME);
         password = input.get(ConfigStore.PASSWORD_FIELD_NAME);
         privateKey = input.get(ConfigStore.PRIVATE_KEY_FIELD_NAME);
-        username = input.get(ConfigStore.USERNAME_FIELD_NAME);
+
+        // check if there is an override user available;
+        String oUser = input.get(ConfigStore.USERNAME_OVERRIDE_FIELD_NAME);
+        if(oUser != null) {
+            username = input.get(ConfigStore.USERNAME_OVERRIDE_FIELD_NAME);
+        } else {
+            username = input.get(ConfigStore.USERNAME_FIELD_NAME);
+        }
+
 
     }
 
