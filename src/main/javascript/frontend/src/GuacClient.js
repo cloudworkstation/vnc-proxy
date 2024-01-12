@@ -48,7 +48,7 @@ const HostList = styled.div`
   border: 1px solid darkgrey;
   padding: 2px;
 
-  max-height: 50px;
+  max-height: 100px;
 
   overflow-y: auto;
 
@@ -408,6 +408,7 @@ const GuacClient = (props) => {
     <div>
       <TitleBar>
         <p>{conState}</p>
+        {mode === "PASS_THROUGH" && shouldConnect && <p>{selectedHost.hostName} {selectedHost.protocol}</p>}
         <p>{`${displayRect.x} x ${displayRect.y}`}</p>
         <p>(x{Math.round(scaleFactor * 100) / 100})</p>
         <div>
