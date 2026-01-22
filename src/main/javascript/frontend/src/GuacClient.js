@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import styled from 'styled-components';
 
-import { Client, WebSocketTunnel, Mouse, Keyboard, BlobReader } from 'guacamole-common-js';
+import Guacamole from 'guacamole-common-js';
 import ModalBox from './ModalBox';
 import axios from 'axios';
 
@@ -79,12 +79,73 @@ const ClipboardPermissions = [
 const DetectAPIAddress = (scheme) => {
   if(window.location.hostname === "localhost" && window.location.port === "3000") {
     // we are running locally, so assume we are needing to talk to tomcat on port 8080
-    return `${scheme}://localhost:8080/workstation-0.0.1/`
+    return `${scheme}://localhost:8080/workstation-0.0.2/`
   } else {
     // we are running against a remote server
     return "";
   }
 }
+
+// Guacamole status codes
+const GUAC_STATUS = {
+  CLIENT_UNAUTHORIZED: 0x0301,  // 769
+  CLIENT_FORBIDDEN: 0x0303,     // 771
+  SERVER_ERROR: 0x0200,         // 512
+  UPSTREAM_TIMEOUT: 0x0207,     // 519
+  UPSTREAM_ERROR: 0x0208,       // 520
+  RESOURCE_CLOSED: 0x0205,      // 517
+  UPSTREAM_UNAVAILABLE: 0x020B  // 523
+};
+
+const RETRYABLE_ERRORS = [
+  GUAC_STATUS.SERVER_ERROR,
+  GUAC_STATUS.UPSTREAM_TIMEOUT,
+  GUAC_STATUS.UPSTREAM_ERROR,
+  GUAC_STATUS.RESOURCE_CLOSED,
+  GUAC_STATUS.UPSTREAM_UNAVAILABLE
+];
+
+const AUTH_ERRORS = [
+  GUAC_STATUS.CLIENT_UNAUTHORIZED,
+  GUAC_STATUS.CLIENT_FORBIDDEN
+];
+
+// Pre-flight check to detect OIDC redirects before WebSocket connection
+const checkAuthStatus = async () => {
+  try {
+    const response = await fetch('/websocket-tunnel', {
+      method: 'HEAD',
+      redirect: 'manual',  // Don't follow redirects automatically
+      credentials: 'include'  // Include cookies for OIDC session
+    });
+
+    // Check if we got a redirect (302)
+    if (response.type === 'opaqueredirect') {
+      console.warn('Auth check detected redirect - OIDC token likely expired');
+      return { authenticated: false, shouldRedirect: true };
+    }
+
+    // Check for explicit auth errors
+    if (response.status === 401 || response.status === 403) {
+      console.warn('Auth check failed with status:', response.status);
+      return { authenticated: false, shouldRedirect: true };
+    }
+
+    // Connection successful
+    if (response.status === 200 || response.status === 0) {
+      console.log('Auth check passed');
+      return { authenticated: true, shouldRedirect: false };
+    }
+
+    // Unexpected status - assume network error, allow retry
+    console.warn('Auth check returned unexpected status:', response.status);
+    return { authenticated: false, shouldRedirect: false };
+  } catch (e) {
+    console.error('Auth check failed with error:', e);
+    // Network error - allow retry with backoff
+    return { authenticated: false, shouldRedirect: false };
+  }
+};
 
 const GuacClient = (props) => {
   const displayRef = useRef(null);
@@ -111,6 +172,11 @@ const GuacClient = (props) => {
   const [localDisplayRect, setLocalDisplayRect] = useState({width: 0, height: 0});
   const [scaleFactor, setScaleFactor] = useState(1);
   const [conState, setConState] = useState("Idle");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const maxReconnectAttempts = 10;
+  const baseReconnectDelay = 1000; // 1 second
+  const maxReconnectDelay = 30000; // 30 seconds
 
   // ref allows this state item to be accessed inside an event listener
   const [clipboardEnabled, _setClipboardEnabled] = useState(false);
@@ -208,7 +274,7 @@ const GuacClient = (props) => {
 
   const getBlob = (stream, mimetype) => {
     return new Promise((resolve, reject) => {
-      const reader = new BlobReader(stream, mimetype);
+      const reader = new Guacamole.BlobReader(stream, mimetype);
       reader.onend = () => {
         resolve(reader.getBlob());
       };
@@ -286,6 +352,51 @@ const GuacClient = (props) => {
     }
   }
 
+  const classifyError = (statusCode) => {
+    if (AUTH_ERRORS.includes(statusCode)) {
+      return 'auth';
+    } else if (RETRYABLE_ERRORS.includes(statusCode)) {
+      return 'retryable';
+    } else {
+      return 'unknown';
+    }
+  };
+
+  const getReconnectDelay = (attempt) => {
+    return Math.min(baseReconnectDelay * Math.pow(2, attempt), maxReconnectDelay);
+  };
+
+  const attemptReconnect = async (attempt) => {
+    if (attempt >= maxReconnectAttempts) {
+      console.error("Max reconnect attempts reached");
+      setIsReconnecting(false);
+      setConState("Disconnected - Max retries exceeded");
+      return;
+    }
+
+    const delay = getReconnectDelay(attempt);
+    console.log(`Reconnect attempt ${attempt + 1}/${maxReconnectAttempts} in ${delay}ms`);
+    setConState(`Reconnecting... (attempt ${attempt + 1}/${maxReconnectAttempts})`);
+
+    setTimeout(async () => {
+      // Pre-flight auth check before WebSocket connection
+      const authStatus = await checkAuthStatus();
+
+      if (authStatus.shouldRedirect) {
+        console.log('Auth expired - redirecting to OIDC login');
+        setConState('Redirecting to login...');
+        // Redirect to current page, oidc-rproxy will intercept and redirect to OIDC
+        window.location.reload();
+        return;
+      }
+
+      // Auth OK, attempt WebSocket connection
+      if (guac.current) {
+        guac.current.connect();
+      }
+    }, delay);
+  };
+
   const Reconnect = () => {
     guac.current.connect();
   }
@@ -322,23 +433,79 @@ const GuacClient = (props) => {
   }, [])
 
   useEffect(() => {
-    if(shouldConnect) {
-      console.log("starting....");
+    const initConnection = async () => {
+      // Pre-flight auth check before initial connection
+      const authStatus = await checkAuthStatus();
+
+      if (authStatus.shouldRedirect) {
+        console.log('Initial auth check failed - redirecting to OIDC login');
+        setConState('Redirecting to login...');
+        window.location.reload();
+        return;
+      }
+
+      // Auth OK, proceed with connection
+      console.log("creating client and connecting...");
 
       // create guac client
       if(mode === "SINGLE") {
         console.log("in single mode, so just connecting to tunnel")
-        guac.current = new Client(new WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/__DEFAULT__`));
+        guac.current = new Guacamole.Client(new Guacamole.WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/__DEFAULT__`));
       } else {
         console.log("in multi mode, using host", selectedHost);
-        guac.current = new Client(new WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/${selectedHost.hostName}`));
+        guac.current = new Guacamole.Client(new Guacamole.WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/${selectedHost.hostName}`));
       }
 
       // attach to canvas
       displayRef.current.appendChild(guac.current.getDisplay().getElement());
       // register error handler
-      guac.current.onerror = (e) => {
-        console.error("error from guac", e);
+      guac.current.onerror = async (status) => {
+        console.error("Error from Guacamole:", status);
+
+        const statusCode = status && status.code ? status.code : null;
+        const statusMessage = status && status.message ? status.message : "Unknown error";
+
+        console.log(`Status code: ${statusCode}, Message: ${statusMessage}`);
+
+        if (statusCode !== null) {
+          const errorType = classifyError(statusCode);
+
+          if (errorType === 'auth') {
+            console.warn("Authentication error detected - checking auth status");
+            // Double-check with pre-flight before redirecting
+            const authStatus = await checkAuthStatus();
+            if (authStatus.shouldRedirect) {
+              console.log('Confirmed auth expired - redirecting to OIDC login');
+              setConState('Redirecting to login...');
+              window.location.reload();
+            } else {
+              setIsReconnecting(false);
+              setConState("Disconnected - Authentication Error");
+            }
+          } else if (errorType === 'retryable' && !isReconnecting) {
+            console.log("Retryable error detected - starting auto-reconnect");
+            setIsReconnecting(true);
+            setReconnectAttempt(0);
+            attemptReconnect(0);
+          } else if (errorType === 'unknown') {
+            // Unknown error could be auth failure (WebSocket upgrade returned 302)
+            // Check auth status to be sure
+            console.warn("Unknown error - checking if auth expired");
+            const authStatus = await checkAuthStatus();
+            if (authStatus.shouldRedirect) {
+              console.log('Auth expired (detected via unknown error) - redirecting');
+              setConState('Redirecting to login...');
+              window.location.reload();
+            } else {
+              console.error("Unknown error type - manual reconnection required");
+              setIsReconnecting(false);
+              setConState("Disconnected - Unknown Error");
+            }
+          }
+        } else {
+          console.error("Error status does not contain a code property");
+          setConState("Disconnected - Error");
+        }
       }
 
       // register disconnect handler
@@ -353,7 +520,20 @@ const GuacClient = (props) => {
       displayObserver.current.observe(displayRef.current);
 
       // register state change handler
-      guac.current.onstatechange = ConnStateUpdate
+      guac.current.onstatechange = (state) => {
+        ConnStateUpdate(state);
+
+        if (state === 3) { // Connected
+          setReconnectAttempt(0);
+          setIsReconnecting(false);
+        }
+
+        if ((state === 4 || state === 5) && isReconnecting) {
+          const nextAttempt = reconnectAttempt + 1;
+          setReconnectAttempt(nextAttempt);
+          attemptReconnect(nextAttempt);
+        }
+      }
 
       // register remote clipboard handler
       guac.current.onclipboard = HandleRemoteClipboard
@@ -362,12 +542,12 @@ const GuacClient = (props) => {
       guac.current.connect();
 
       // register mouse handler
-      let mouse  = new Mouse(guac.current.getDisplay().getElement());
-      mouse.onmousedown = 
-      mouse.onmouseup = 
+      let mouse  = new Guacamole.Mouse(guac.current.getDisplay().getElement());
+      mouse.onmousedown =
+      mouse.onmouseup =
       mouse.onmousemove = (mouseState) => {
         const scale = guac.current.getDisplay().getScale();
-        const scaledState = new Mouse.State(
+        const scaledState = new Guacamole.Mouse.State(
           mouseState.x / scale,
           mouseState.y / scale,
           mouseState.left,
@@ -380,7 +560,7 @@ const GuacClient = (props) => {
       }
 
       // register keyboard handler
-      let keyboard = new Keyboard(document);
+      let keyboard = new Guacamole.Keyboard(document);
       keyboard.onkeydown = (keysym) => {
         guac.current.sendKeyEvent(1, keysym);
         if(keysym === 32) {
@@ -394,6 +574,10 @@ const GuacClient = (props) => {
       keyboard.onkeyup = (keysym) => {
         guac.current.sendKeyEvent(0, keysym);
       }
+    };
+
+    if(shouldConnect) {
+      initConnection();
     }
   }, [shouldConnect])
 
@@ -408,6 +592,11 @@ const GuacClient = (props) => {
     <div>
       <TitleBar>
         <p>{conState}</p>
+        {isReconnecting && (
+          <p style={{color: '#ffa500'}}>
+            Reconnecting... ({reconnectAttempt}/{maxReconnectAttempts})
+          </p>
+        )}
         {mode === "PASS_THROUGH" && shouldConnect && <p>{selectedHost.hostName} {selectedHost.protocol}</p>}
         <p>{`${displayRect.x} x ${displayRect.y}`}</p>
         <p>(x{Math.round(scaleFactor * 100) / 100})</p>
@@ -422,7 +611,26 @@ const GuacClient = (props) => {
         </div>
         <button disabled={!clipboardEnabled} onClick={SendToRemoteClipboard}>Copy to remote clipboard</button>
         <p></p>
-        <button disabled={conState === "Connected"} onClick={Reconnect}>Reconnect</button>
+        <button
+          disabled={conState === "Connected" || isReconnecting}
+          onClick={async () => {
+            setReconnectAttempt(0);
+            setIsReconnecting(false);
+
+            // Check auth before manual reconnect
+            const authStatus = await checkAuthStatus();
+            if (authStatus.shouldRedirect) {
+              console.log('Auth expired - redirecting to OIDC login');
+              setConState('Redirecting to login...');
+              window.location.reload();
+              return;
+            }
+
+            Reconnect();
+          }}
+        >
+          Reconnect
+        </button>
       </TitleBar>
       <Display
         ref={displayRef} 
