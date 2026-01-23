@@ -135,7 +135,7 @@
                         <configuration>
                             <arguments>run build</arguments>
                             <environmentVariables>
-                                <PUBLIC_URL>/workstation-${project.version}/</PUBLIC_URL>
+                                <PUBLIC_URL>/workstation/</PUBLIC_URL>
                                 <CI>false</CI>
                             </environmentVariables>
                         </configuration>
