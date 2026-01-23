@@ -1,0 +1,59 @@
+services:
+  # Guacamole daemon - handles VNC/RDP protocol connections
+  guacd:
+    image: guacamole/guacd:1.6.0
+    container_name: vnc-proxy-guacd
+    restart: unless-stopped
+    networks:
+      - vnc-proxy-network
+    # Uncomment to enable debug logging
+    # command: ["-L", "debug"]
+
+  # VNC Proxy web application
+  vnc-proxy:
+    image: vnc-proxy:0.0.2
+    container_name: vnc-proxy-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - vnc-proxy-network
+    env_file:
+      - .env  # Load environment variables from .env file
+    environment:
+      # Guacamole daemon port (GUACD_HOST comes from .env)
+      - GUACD_PORT=4822
+      # JVM options
+      - CATALINA_OPTS=-Xmx512m -Xms256m
+    # AUTH_MODE, AWS credentials, CONFIG_TABLE loaded from .env
+    depends_on:
+      - guacd
+    # Expose Tomcat port for debugging (normally accessed via oidc-rproxy)
+    # ports:
+    #   - "8080:8080"
+
+  # OIDC Reverse Proxy - handles authentication
+  oidc-rproxy:
+    image: int-reg.zz9pza.co/oidc-rproxy-rjk:latest
+    container_name: vnc-proxy-oidc
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8443}:${PORT:-8443}"  # Port from .env (default 8443)
+    networks:
+      - vnc-proxy-network
+    env_file:
+      - .env  # Load all environment variables from .env file
+    # All OIDC configuration loaded from .env:
+    # DOMAIN, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_CRYPTO_PASSPHRASE,
+    # OIDC_PROVIDER_JWKS_URI, OIDC_PROVIDER_METADATA_URL, OIDC_REMOTE_USER,
+    # PORT, SCHEME, UPSTREAM
+    depends_on:
+      - vnc-proxy
+    # Uncomment to mount custom TLS certificates
+    # volumes:
+    #   - ./certs:/certs:ro
+
+networks:
+  vnc-proxy-network:
+    driver: bridge
