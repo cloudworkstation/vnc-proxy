@@ -79,7 +79,7 @@ const ClipboardPermissions = [
 const DetectAPIAddress = (scheme) => {
   if(window.location.hostname === "localhost" && window.location.port === "3000") {
     // we are running locally, so assume we are needing to talk to tomcat on port 8080
-    return `${scheme}://localhost:8080/workstation-0.0.2/`
+    return `${scheme}://localhost:8080/workstation/`
   } else {
     // we are running against a remote server
     return "";
@@ -359,16 +359,23 @@ const GuacClient = (props) => {
       reader.onend = () => {
         resolve(reader.getBlob());
       };
+      reader.onerror = () => {
+        reject(new Error('Failed to read clipboard blob from remote'));
+      };
     });
   }
 
-  const SendToLocalClipboard = (blob, mimetype) => {
+  const SendToLocalClipboard = async (blob, mimetype) => {
     if(clipboardEnabledRef.current) {
-      navigator.clipboard.write([
-        new window.ClipboardItem({
-          [mimetype]: blob
-        })
-      ]);
+      try {
+        await navigator.clipboard.write([
+          new window.ClipboardItem({
+            [mimetype]: blob
+          })
+        ]);
+      } catch (error) {
+        console.error("Failed to write to local clipboard:", error);
+      }
     }
   }
 
@@ -383,39 +390,71 @@ const GuacClient = (props) => {
   }
 
   const blobToBase64 = (blob) => {
-    return new Promise((res, _) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onloadend = () => res(reader.result);
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Failed to read blob as base64'));
       reader.readAsDataURL(blob);
     });
   }
 
   const sendBlobBasedOnMimeType = async (item, mimeType) => {
-    const blob = await item.getType(mimeType);
-    const blobAsDataUrl = await blobToBase64(blob);
-    const blobAsB64 = blobAsDataUrl.split(",")[1];
-    const stream = guac.current.createClipboardStream(mimeType, "remote");
-    stream.onack = () => {
+    try {
+      const blob = await item.getType(mimeType);
+      const blobAsDataUrl = await blobToBase64(blob);
+      const blobAsB64 = blobAsDataUrl.split(",")[1];
+
+      console.log(`Sending ${blobAsB64.length} bytes to remote clipboard (type: ${mimeType})`);
+
+      const stream = guac.current.createClipboardStream(mimeType, "remote");
+
+      stream.onerror = (error) => {
+        console.error("Clipboard stream error:", error);
+      }
+
+      // Send the blob
+      stream.sendBlob(blobAsB64);
+
+      // Close the stream immediately after sending
       stream.sendEnd();
+      console.log('Clipboard stream sent and closed');
+
+    } catch (error) {
+      console.error("Failed to send blob to remote:", error);
+      throw error;
     }
-    stream.sendBlob(blobAsB64);
   }
 
   const MimeOrder = ['text/plain', 'text/html'];
 
   const SendToRemoteClipboard = async () => {
-    const items = await navigator.clipboard.read();
-    if(items.length > 0) {
-      const item = items[0];
-      const itemTypes = item.types;
-      if(itemTypes.length >  1) {
-        const typeToSend = itemTypes.map(i => MimeOrder.indexOf(i)).reduce((p, c) => Math.max(p, c), -1);
-        if(typeToSend != -1) {
-          sendBlobBasedOnMimeType(item, MimeOrder[typeToSend]);
+    try {
+      console.log('Reading local clipboard...');
+      const items = await navigator.clipboard.read();
+      console.log(`Read ${items.length} clipboard items`);
+
+      if(items.length > 0) {
+        const item = items[0];
+        const itemTypes = item.types;
+        console.log('Available MIME types:', itemTypes);
+
+        if(itemTypes.length >  1) {
+          const typeToSend = itemTypes.map(i => MimeOrder.indexOf(i)).reduce((p, c) => Math.max(p, c), -1);
+          if(typeToSend !== -1) {
+            console.log(`Sending type: ${MimeOrder[typeToSend]}`);
+            await sendBlobBasedOnMimeType(item, MimeOrder[typeToSend]);
+            console.log('Clipboard sent successfully');
+          }
+        } else {
+          console.log(`Sending type: ${itemTypes[0]}`);
+          await sendBlobBasedOnMimeType(item, itemTypes[0]);
+          console.log('Clipboard sent successfully');
         }
       } else {
-        sendBlobBasedOnMimeType(item, itemTypes[0]);
+        console.log('No clipboard items found');
       }
+    } catch (error) {
+      console.error("Failed to send to remote clipboard:", error);
     }
   }
 
