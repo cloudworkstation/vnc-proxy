@@ -246,24 +246,42 @@ const GuacClient = (props) => {
   const [localDisplayRect, setLocalDisplayRect] = useState({width: 0, height: 0});
   const [scaleFactor, setScaleFactor] = useState(1);
   const [conState, setConState] = useState("Idle");
-  const [reconnectAttempt, setReconnectAttempt] = useState(0);
-  const [isReconnecting, _setIsReconnecting] = useState(false);
+
+  // Reconnection state machine
+  const ReconnectState = {
+    CONNECTED: 'CONNECTED',
+    DISCONNECTED: 'DISCONNECTED',
+    RECONNECTING: 'RECONNECTING',
+    CHECKING_AUTH: 'CHECKING_AUTH',
+    REAUTHING: 'REAUTHING',
+    FAILED: 'FAILED'
+  };
+
+  const [reconnectState, _setReconnectState] = useState(ReconnectState.DISCONNECTED);
+  const reconnectStateRef = useRef(reconnectState);
+  const setReconnectState = data => {
+    reconnectStateRef.current = data;
+    _setReconnectState(data);
+  };
+
+  const [reconnectAttempt, _setReconnectAttempt] = useState(0);
+  const reconnectAttemptRef = useRef(reconnectAttempt);
+  const setReconnectAttempt = data => {
+    reconnectAttemptRef.current = data;
+    _setReconnectAttempt(data);
+  };
+
+  const reconnectTimerRef = useRef(null);
+  const lastErrorRef = useRef(null);
+
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 1000; // 1 second
   const maxReconnectDelay = 30000; // 30 seconds
 
-  // ref allows reconnection state to be accessed inside event listeners
-  const isReconnectingRef = useRef(isReconnecting);
-  const setIsReconnecting = data => {
-    isReconnectingRef.current = data;
-    _setIsReconnecting(data);
-  };
-
-  const reconnectAttemptRef = useRef(reconnectAttempt);
-  const setReconnectAttemptWithRef = data => {
-    reconnectAttemptRef.current = data;
-    setReconnectAttempt(data);
-  };
+  // Session timer - tracks time since last successful connection
+  const [sessionTime, setSessionTime] = useState(0);
+  const sessionStartTimeRef = useRef(null);
+  const sessionTimerIntervalRef = useRef(null);
 
   // ref allows this state item to be accessed inside an event listener
   const [clipboardEnabled, _setClipboardEnabled] = useState(false);
@@ -458,6 +476,46 @@ const GuacClient = (props) => {
     }
   }
 
+  // Start session timer
+  const startSessionTimer = React.useCallback(() => {
+    // Clear any existing timer
+    if (sessionTimerIntervalRef.current) {
+      clearInterval(sessionTimerIntervalRef.current);
+    }
+
+    // Record start time
+    sessionStartTimeRef.current = Date.now();
+    setSessionTime(0);
+
+    // Update every second
+    sessionTimerIntervalRef.current = setInterval(() => {
+      if (sessionStartTimeRef.current) {
+        const elapsed = Math.floor((Date.now() - sessionStartTimeRef.current) / 1000);
+        setSessionTime(elapsed);
+      }
+    }, 1000);
+
+    console.log('[Timer] Session timer started');
+  }, []);
+
+  // Stop session timer
+  const stopSessionTimer = React.useCallback(() => {
+    if (sessionTimerIntervalRef.current) {
+      clearInterval(sessionTimerIntervalRef.current);
+      sessionTimerIntervalRef.current = null;
+    }
+    sessionStartTimeRef.current = null;
+    console.log('[Timer] Session timer stopped');
+  }, []);
+
+  // Format seconds as HH:MM:SS
+  const formatSessionTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const classifyError = (statusCode) => {
     if (AUTH_ERRORS.includes(statusCode)) {
       return 'auth';
@@ -472,48 +530,137 @@ const GuacClient = (props) => {
     return Math.min(baseReconnectDelay * Math.pow(2, attempt), maxReconnectDelay);
   };
 
-  const attemptReconnect = async (attempt) => {
-    if (attempt >= maxReconnectAttempts) {
-      console.error("Max reconnect attempts reached");
-      setIsReconnecting(false);
-      setConState("Disconnected - Max retries exceeded");
-      return;
-    }
-
+  // Schedule a reconnection attempt with backoff
+  const scheduleReconnectAttempt = React.useCallback((attempt) => {
     const delay = getReconnectDelay(attempt);
-    console.log(`Reconnect attempt ${attempt + 1}/${maxReconnectAttempts} in ${delay}ms`);
-    setConState("Connecting...");
+    console.log(`[Coordinator] Scheduling attempt ${attempt + 1}/${maxReconnectAttempts} in ${delay}ms`);
 
-    setTimeout(async () => {
-      // Pre-flight auth check before WebSocket connection
-      const authStatus = await checkAuthStatus();
+    reconnectTimerRef.current = setTimeout(() => {
+      executeReconnectAttempt(attempt);
+    }, delay);
+  }, []);
 
-      if (authStatus.shouldRedirect) {
-        console.log('Auth expired - re-authenticating via popup');
-        setConState('Re-authenticating...');
-        try {
-          await reauthenticateViaPopup();
-          // Auth succeeded, retry connection
-          if (guac.current) {
-            guac.current.connect();
-          }
-        } catch (error) {
-          console.error('[Reauth] Failed:', error);
-          setConState('Re-authentication failed - please refresh page');
+  // Execute a single reconnection attempt
+  const executeReconnectAttempt = React.useCallback(async (attempt) => {
+    console.log(`[Coordinator] Executing attempt ${attempt + 1}/${maxReconnectAttempts}`);
+
+    // Step 1: Check authentication
+    setReconnectState(ReconnectState.CHECKING_AUTH);
+    const authStatus = await checkAuthStatus();
+
+    if (authStatus.shouldRedirect) {
+      // Auth expired - need to reauth
+      console.log('[Coordinator] Auth expired, starting reauth flow');
+      setReconnectState(ReconnectState.REAUTHING);
+      setConState('Re-authenticating...');
+
+      try {
+        await reauthenticateViaPopup();
+        console.log('[Coordinator] Reauth successful, attempting connection');
+
+        // After reauth, try to connect
+        setReconnectState(ReconnectState.RECONNECTING);
+        if (guac.current) {
+          guac.current.connect();
         }
-        return;
+
+        // Tunnel state handler will call us back if connection fails
+
+      } catch (reauthError) {
+        console.error('[Coordinator] Reauth failed:', reauthError);
+
+        // Reauth failed - treat as a failed attempt and retry
+        const nextAttempt = attempt + 1;
+        if (nextAttempt >= maxReconnectAttempts) {
+          setReconnectState(ReconnectState.FAILED);
+          setConState('Re-authentication failed - Max retries exceeded');
+        } else {
+          // Retry the whole process (including auth check)
+          setReconnectAttempt(nextAttempt);
+          scheduleReconnectAttempt(nextAttempt);
+        }
       }
 
-      // Auth OK, attempt WebSocket connection
+    } else {
+      // Auth is OK - just reconnect
+      console.log('[Coordinator] Auth OK, attempting connection');
+      setReconnectState(ReconnectState.RECONNECTING);
+
       if (guac.current) {
         guac.current.connect();
       }
-    }, delay);
-  };
 
-  const Reconnect = () => {
-    guac.current.connect();
-  }
+      // Tunnel state handler will call us back if connection fails
+    }
+  }, [ReconnectState, scheduleReconnectAttempt, setReconnectState, setConState, setReconnectAttempt, maxReconnectAttempts]);
+
+  // Central reconnection coordinator
+  const reconnectionCoordinator = React.useCallback((trigger, errorInfo = null) => {
+    console.log(`[Coordinator] Triggered by: ${trigger}, Current state: ${reconnectStateRef.current}`);
+
+    // Cancel any pending reconnection timer
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    // Update error info if provided
+    if (errorInfo) {
+      lastErrorRef.current = errorInfo;
+    }
+
+    const currentState = reconnectStateRef.current;
+
+    // State-based decision making
+    switch (currentState) {
+      case ReconnectState.CONNECTED:
+        // Connection just dropped - start reconnection
+        console.log('[Coordinator] Connection lost, starting reconnection');
+        setReconnectState(ReconnectState.CHECKING_AUTH);
+        setReconnectAttempt(0);
+        scheduleReconnectAttempt(0);
+        break;
+
+      case ReconnectState.RECONNECTING:
+        // A reconnection attempt failed - continue sequence
+        const nextAttempt = reconnectAttemptRef.current + 1;
+
+        if (nextAttempt >= maxReconnectAttempts) {
+          console.error('[Coordinator] Max retries exceeded');
+          setReconnectState(ReconnectState.FAILED);
+          setConState('Disconnected - Max retries exceeded');
+          return;
+        }
+
+        console.log(`[Coordinator] Attempt ${reconnectAttemptRef.current} failed, scheduling attempt ${nextAttempt}`);
+        setReconnectAttempt(nextAttempt);
+        scheduleReconnectAttempt(nextAttempt);
+        break;
+
+      case ReconnectState.CHECKING_AUTH:
+      case ReconnectState.REAUTHING:
+        // Already handling auth or reconnection - ignore duplicate triggers
+        console.log('[Coordinator] Already handling reconnection, ignoring duplicate trigger');
+        break;
+
+      case ReconnectState.FAILED:
+        // In failed state - only manual reconnect can restart
+        console.log('[Coordinator] In failed state, ignoring trigger');
+        break;
+
+      case ReconnectState.DISCONNECTED:
+        // Not connected and not trying - this shouldn't happen from a trigger
+        console.warn('[Coordinator] Triggered from DISCONNECTED state - starting reconnection');
+        setReconnectState(ReconnectState.CHECKING_AUTH);
+        setReconnectAttempt(0);
+        scheduleReconnectAttempt(0);
+        break;
+
+      default:
+        console.warn('[Coordinator] Unknown state:', currentState);
+        break;
+    }
+  }, [ReconnectState, setReconnectState, setReconnectAttempt, scheduleReconnectAttempt, setConState, maxReconnectAttempts]);
 
   useEffect(() => {
     axios.get(`${DetectAPIAddress("http")}clientconfig`)
@@ -548,11 +695,13 @@ const GuacClient = (props) => {
       if (authStatus.shouldRedirect) {
         console.warn('Initial auth check failed - re-authenticating via popup');
         setConState('Re-authenticating...');
+        setReconnectState(ReconnectState.REAUTHING);
         try {
           await reauthenticateViaPopup();
         } catch (error) {
           console.error('[Reauth] Failed:', error);
           setConState('Re-authentication failed - please refresh page');
+          setReconnectState(ReconnectState.FAILED);
           return;
         }
       }
@@ -565,68 +714,61 @@ const GuacClient = (props) => {
         tunnel = new Guacamole.WebSocketTunnel(`${DetectAPIAddress("ws")}websocket-tunnel/${selectedHost.hostName}`);
       }
 
-      // Track previous tunnel state to detect transitions
-      let previousTunnelState = null;
+      // Track if tunnel was ever successfully opened
       let tunnelWasOpen = false;
 
       // Monitor tunnel state changes
       tunnel.onstatechange = (state) => {
         // Tunnel states: CONNECTING=0, OPEN=1, CLOSED=2, UNSTABLE=3
         if (state === Guacamole.Tunnel.State.OPEN) {
+          console.log('[Tunnel] Connection opened');
           tunnelWasOpen = true;
 
-          // Reset reconnection state on successful connection
-          if (isReconnectingRef.current) {
-            setIsReconnecting(false);
-            setReconnectAttemptWithRef(0);
+          // Success! Reset to connected state
+          if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
           }
+          setReconnectState(ReconnectState.CONNECTED);
+          setReconnectAttempt(0);
+          setConState('Connected');
+
+          // Start session timer
+          startSessionTimer();
+
         } else if (state === Guacamole.Tunnel.State.CLOSED) {
-          // If we were previously open, we need to reconnect
+          console.log('[Tunnel] Connection closed');
+
+          // Stop session timer
+          stopSessionTimer();
+
+          // Only trigger reconnection if we were previously connected
           if (tunnelWasOpen) {
-            if (!isReconnectingRef.current) {
-              console.log('[Tunnel] Connection dropped - starting reconnection');
-              setIsReconnecting(true);
-              setReconnectAttemptWithRef(0);
-              attemptReconnect(0);
-            } else {
-              // Already reconnecting - this is a failed reconnect attempt
-              const nextAttempt = reconnectAttemptRef.current + 1;
-              setReconnectAttemptWithRef(nextAttempt);
-              attemptReconnect(nextAttempt);
+            const currentState = reconnectStateRef.current;
+
+            if (currentState === ReconnectState.CONNECTED) {
+              // This is an unexpected disconnect - start reconnection
+              reconnectionCoordinator('tunnel-closed');
+
+            } else if (currentState === ReconnectState.RECONNECTING) {
+              // This was a reconnection attempt that failed - tell coordinator
+              reconnectionCoordinator('reconnect-failed');
+
             }
+            // If in CHECKING_AUTH or REAUTHING state, coordinator is already handling it
           }
         }
-
-        previousTunnelState = state;
       };
 
-      // Monitor tunnel errors for auth detection
-      // Reconnection is handled by the tunnel state CLOSED handler to avoid duplicates
+      // Monitor tunnel errors - just log, let state handler trigger reconnection
       tunnel.onerror = (status) => {
-        const statusCode = status && status.code ? status.code : null;
+        const statusCode = status?.code;
+        console.log('[Tunnel] Error:', statusCode);
 
-        if (statusCode !== null) {
-          const errorType = classifyError(statusCode);
-
-          // Only handle auth errors here - retryable errors will be handled by CLOSED state
-          if (errorType === 'auth') {
-            console.warn('[Tunnel] Authentication error - checking auth status');
-            checkAuthStatus().then(async authStatus => {
-              if (authStatus.shouldRedirect) {
-                setConState('Re-authenticating...');
-                try {
-                  await reauthenticateViaPopup();
-                  if (guac.current) {
-                    guac.current.connect();
-                  }
-                } catch (error) {
-                  console.error('[Reauth] Failed:', error);
-                  setConState('Re-authentication failed');
-                }
-              }
-            });
-          }
+        if (statusCode && AUTH_ERRORS.includes(statusCode)) {
+          lastErrorRef.current = { type: 'auth', code: statusCode };
         }
+        // Don't trigger coordinator - let state handler do it when tunnel closes
       };
 
       // Store tunnel reference for later WebSocket monitoring
@@ -638,54 +780,16 @@ const GuacClient = (props) => {
       // attach to canvas
       displayRef.current.appendChild(guac.current.getDisplay().getElement());
 
-      // register error handler
-      guac.current.onerror = async (status) => {
-        const statusCode = status && status.code ? status.code : null;
+      // register error handler - just log, let state handler trigger reconnection
+      guac.current.onerror = (status) => {
+        const statusCode = status?.code;
+        console.log('[Client] Error:', statusCode);
 
-        if (statusCode !== null) {
+        if (statusCode) {
           const errorType = classifyError(statusCode);
-
-          if (errorType === 'auth') {
-            console.warn("Authentication error - checking auth status");
-            const authStatus = await checkAuthStatus();
-            if (authStatus.shouldRedirect) {
-              setConState('Re-authenticating...');
-              try {
-                await reauthenticateViaPopup();
-                setIsReconnecting(true);
-                setReconnectAttemptWithRef(0);
-                attemptReconnect(0);
-              } catch (error) {
-                console.error('[Reauth] Failed:', error);
-                setIsReconnecting(false);
-                setConState("Re-authentication failed");
-              }
-            } else {
-              setIsReconnecting(false);
-              setConState("Disconnected - Authentication Error");
-            }
-          } else if (errorType === 'retryable' && !isReconnectingRef.current) {
-            setIsReconnecting(true);
-            setReconnectAttemptWithRef(0);
-            attemptReconnect(0);
-          } else if (errorType === 'unknown') {
-            // Unknown error could be auth failure (WebSocket upgrade returned 302)
-            console.warn("Unknown error - checking if auth expired");
-            const authStatus = await checkAuthStatus();
-            if (authStatus.shouldRedirect) {
-              setConState('Re-authenticating...');
-              try {
-                await reauthenticateViaPopup();
-                setIsReconnecting(true);
-                setReconnectAttemptWithRef(0);
-                attemptReconnect(0);
-              } catch (error) {
-                console.error('[Reauth] Failed:', error);
-                setConState("Re-authentication failed");
-              }
-            }
-          }
+          lastErrorRef.current = { type: errorType, code: statusCode };
         }
+        // Don't trigger coordinator - let state handler do it when tunnel closes
       }
 
       // register disconnect handler
@@ -699,27 +803,16 @@ const GuacClient = (props) => {
       // register local resize
       displayObserver.current.observe(displayRef.current);
 
-      // register state change handler
+      // register state change handler - just updates UI
       guac.current.onstatechange = (state) => {
         ConnStateUpdate(state);
 
         if (state === 3) { // Connected
-          setReconnectAttemptWithRef(0);
-          setIsReconnecting(false);
+          console.log('[Client] State: Connected');
         }
 
-        // State 4 = DISCONNECTING, State 5 = DISCONNECTED
-        if (state === 4 || state === 5) {
-          if (isReconnectingRef.current) {
-            const nextAttempt = reconnectAttemptRef.current + 1;
-            setReconnectAttemptWithRef(nextAttempt);
-            attemptReconnect(nextAttempt);
-          } else if (reconnectAttemptRef.current < maxReconnectAttempts) {
-            setIsReconnecting(true);
-            setReconnectAttemptWithRef(0);
-            attemptReconnect(0);
-          }
-        }
+        // Note: Reconnection is handled by tunnel.onstatechange and coordinator
+        // This handler only updates the UI state
       }
 
       // register remote clipboard handler
@@ -766,13 +859,15 @@ const GuacClient = (props) => {
         if (guac.current) {
           guac.current.disconnect();
         }
+        // Stop session timer
+        stopSessionTimer();
       };
     };
 
     if(shouldConnect) {
       initConnection();
     }
-  }, [shouldConnect])
+  }, [shouldConnect, stopSessionTimer])
 
   const connect = (host) => {
     setSelectedHost(host);
@@ -784,9 +879,16 @@ const GuacClient = (props) => {
     <div>
       <TitleBar>
         <p>{conState}</p>
-        {isReconnecting && (
+        {reconnectState === ReconnectState.CONNECTED && (
+          <p style={{color: '#4CAF50'}}>
+            Session: {formatSessionTime(sessionTime)}
+          </p>
+        )}
+        {(reconnectState === ReconnectState.RECONNECTING ||
+          reconnectState === ReconnectState.CHECKING_AUTH ||
+          reconnectState === ReconnectState.REAUTHING) && (
           <p style={{color: '#ffa500'}}>
-            Reconnecting... ({reconnectAttempt}/{maxReconnectAttempts})
+            {reconnectState === ReconnectState.REAUTHING ? 'Re-authenticating...' : `Reconnecting... (${reconnectAttempt + 1}/${maxReconnectAttempts})`}
           </p>
         )}
         {mode === "PASS_THROUGH" && shouldConnect && <p>{selectedHost.hostName} {selectedHost.protocol}</p>}
@@ -804,27 +906,26 @@ const GuacClient = (props) => {
         <button disabled={!clipboardEnabled} onClick={SendToRemoteClipboard}>Copy to remote clipboard</button>
         <p></p>
         <button
-          disabled={conState === "Connected" || isReconnecting}
-          onClick={async () => {
-            setReconnectAttemptWithRef(0);
-            setIsReconnecting(false);
+          disabled={reconnectState === ReconnectState.CONNECTED ||
+                    reconnectState === ReconnectState.RECONNECTING ||
+                    reconnectState === ReconnectState.REAUTHING ||
+                    reconnectState === ReconnectState.CHECKING_AUTH}
+          onClick={() => {
+            console.log('[Manual] User triggered reconnect');
 
-            // Check auth before manual reconnect
-            const authStatus = await checkAuthStatus();
-            if (authStatus.shouldRedirect) {
-              console.warn('Manual reconnect: Auth expired - re-authenticating via popup');
-              setConState('Re-authenticating...');
-              try {
-                await reauthenticateViaPopup();
-                Reconnect();
-              } catch (error) {
-                console.error('[Reauth] Failed:', error);
-                setConState('Re-authentication failed');
-              }
-              return;
+            // Cancel any existing timers
+            if (reconnectTimerRef.current) {
+              clearTimeout(reconnectTimerRef.current);
+              reconnectTimerRef.current = null;
             }
 
-            Reconnect();
+            // Reset state and start fresh
+            setReconnectState(ReconnectState.CHECKING_AUTH);
+            setReconnectAttempt(0);
+            lastErrorRef.current = null;
+
+            // Start reconnection
+            scheduleReconnectAttempt(0);
           }}
         >
           Reconnect
